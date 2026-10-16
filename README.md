@@ -69,3 +69,5 @@ npm install
 npm test
 npm run build
 ```
+
+`npm run build` 编译服务端与 TUI（Solid universal）；`npm pack` / `npm publish` 会通过 `prepack` 自动构建，发布入口均为 `dist/` 下的 JavaScript。
