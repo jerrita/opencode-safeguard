@@ -50,6 +50,18 @@ describe("vault", () => {
     restoreToolInput(v, "s9", input);
     expect(input).toEqual({ command: "run tok-abc-123", nested: { args: ["tok-abc-123", "plain"] } });
   });
+
+  it("accumulates round counters until the next user prompt", () => {
+    const v = new Vault();
+    v.startRound("s1");
+    v.addRedacted("s1", 2);
+    v.addRestored("s1", 1, "tool:bash");
+    expect(v.round("s1")).toEqual({ redacted: 2, restored: 1, restoreKind: "tool:bash" });
+    v.addRestored("s1", 3, "tool:edit");
+    expect(v.round("s1")).toEqual({ redacted: 2, restored: 4, restoreKind: "tool:edit" });
+    v.startRound("s1");
+    expect(v.round("s1")).toEqual({ redacted: 0, restored: 0, restoreKind: "" });
+  });
 });
 
 describe("toggle config", () => {

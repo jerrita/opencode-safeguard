@@ -24,7 +24,8 @@ export function applyStored(state: SafeguardState, stored: unknown): void {
   if (typeof s.enabled === "boolean") state.enabled = s.enabled;
   if (typeof s.audit === "boolean") state.audit = s.audit;
   if (typeof s.minEntropy === "number" && Number.isFinite(s.minEntropy)) state.minEntropy = s.minEntropy;
-  if (typeof s.minTokenLength === "number" && Number.isFinite(s.minTokenLength)) state.minTokenLength = s.minTokenLength;
+  if (typeof s.minTokenLength === "number" && Number.isFinite(s.minTokenLength))
+    state.minTokenLength = s.minTokenLength;
 }
 
 export const SENSITIVITY_PRESETS = {

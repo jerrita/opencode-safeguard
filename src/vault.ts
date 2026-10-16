@@ -6,6 +6,15 @@
  * with full fidelity. Mappings live in memory for the process lifetime
  * and never leave the device.
  */
+
+/** What the safeguard did during the current user turn. */
+export interface RoundCounters {
+  redacted: number;
+  restored: number;
+  /** Tool that last required a restore, e.g. "tool:bash". */
+  restoreKind: string;
+}
+
 export class Vault {
   // Global sequence: placeholders must be unique across sessions so that
   // identical counters in different sessions can never collide on distinct values.
@@ -43,7 +52,11 @@ export class Vault {
   }
 
   /** Replace every known secret occurrence (longest first). Returns transformed text + count. */
-  redactText(sessionID: string, text: string, detections: { value: string; type: string }[]): { text: string; count: number } {
+  redactText(
+    sessionID: string,
+    text: string,
+    detections: { value: string; type: string }[],
+  ): { text: string; count: number } {
     let out = text;
     let count = 0;
     for (const { value, type } of detections) {
@@ -80,9 +93,47 @@ export class Vault {
     return this.forward.get(sessionID)?.size ?? 0;
   }
 
+  /** Distinct entries mapped across every session. */
+  totalSize(): number {
+    let total = 0;
+    for (const m of this.forward.values()) total += m.size;
+    return total;
+  }
+
+  /** Round counters for the sidebar: reset on each user prompt, accumulated until the next one. */
+  private rounds = new Map<string, RoundCounters>();
+
+  startRound(sessionID: string): void {
+    this.rounds.set(sessionID, { redacted: 0, restored: 0, restoreKind: "" });
+  }
+
+  addRedacted(sessionID: string, count: number): void {
+    this.roundState(sessionID).redacted += count;
+  }
+
+  addRestored(sessionID: string, count: number, kind: string): void {
+    const r = this.roundState(sessionID);
+    r.restored += count;
+    r.restoreKind = kind;
+  }
+
+  round(sessionID: string): RoundCounters {
+    return this.rounds.get(sessionID) ?? { redacted: 0, restored: 0, restoreKind: "" };
+  }
+
+  private roundState(sessionID: string): RoundCounters {
+    let r = this.rounds.get(sessionID);
+    if (!r) {
+      r = { redacted: 0, restored: 0, restoreKind: "" };
+      this.rounds.set(sessionID, r);
+    }
+    return r;
+  }
+
   clear(sessionID: string): void {
     this.forward.delete(sessionID);
     this.reverse.delete(sessionID);
+    this.rounds.delete(sessionID);
   }
 }
 

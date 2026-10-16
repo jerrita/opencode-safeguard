@@ -18,8 +18,29 @@ export const Safeguard = Rpc.define({
           minEntropy: { type: "number" },
           minTokenLength: { type: "number" },
           literals: { type: "number" },
+          rules: { type: "number" },
         },
-        required: ["enabled", "audit", "minEntropy", "minTokenLength", "literals"],
+        required: ["enabled", "audit", "minEntropy", "minTokenLength", "literals", "rules"],
+        additionalProperties: false,
+      },
+    },
+    getSession: {
+      input: {
+        type: "object",
+        properties: { sessionID: { type: "string" } },
+        required: ["sessionID"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          entries: { type: "number" },
+          totalEntries: { type: "number" },
+          roundRedacted: { type: "number" },
+          roundRestored: { type: "number" },
+          roundRestoreKind: { type: "string" },
+        },
+        required: ["entries", "totalEntries", "roundRedacted", "roundRestored", "roundRestoreKind"],
         additionalProperties: false,
       },
     },
@@ -70,7 +91,16 @@ export const Safeguard = Rpc.define({
     updated: {
       schema: {
         type: "object",
-        properties: { enabled: { type: "boolean" }, audit: { type: "boolean" } },
+        properties: {
+          enabled: { type: "boolean" },
+          audit: { type: "boolean" },
+          sessionID: { type: "string" },
+          entries: { type: "number" },
+          totalEntries: { type: "number" },
+          roundRedacted: { type: "number" },
+          roundRestored: { type: "number" },
+          roundRestoreKind: { type: "string" },
+        },
         required: ["enabled", "audit"],
         additionalProperties: false,
       },

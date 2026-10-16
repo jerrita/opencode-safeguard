@@ -81,7 +81,10 @@ export function parseDotenv(text: string): string[] {
     const eq = withoutExport.indexOf("=");
     if (eq <= 0) continue;
     let value = withoutExport.slice(eq + 1).trim();
-    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
       value = value.slice(1, -1);
     }
     // Strip trailing inline comments for unquoted values.

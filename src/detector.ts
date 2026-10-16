@@ -22,7 +22,8 @@ const PATTERNS: Pattern[] = [
   { type: "JWT", regex: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
   {
     type: "PRIVATE_KEY",
-    regex: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
+    regex:
+      /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
   },
   { type: "BEARER_TOKEN", regex: /\bBearer\s+([A-Za-z0-9\-._~+/=]{20,})/g, group: 1 },
   {
@@ -32,7 +33,8 @@ const PATTERNS: Pattern[] = [
   // key = value / key: value assignments; only the value is secret.
   {
     type: "ASSIGNED_SECRET",
-    regex: /\b(?:password|passwd|pwd|secret|token|api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key)\s*[:=]\s*['"]?([^\s'"`;,\}]{8,})/gi,
+    regex:
+      /\b(?:password|passwd|pwd|secret|token|api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key)\s*[:=]\s*['"]?([^\s'"`;,\}]{8,})/gi,
     group: 1,
   },
 ];
@@ -226,7 +228,5 @@ export function findSecretsInText(text: string, opts: ScanOptions): Detection[] 
     if (m[0].length === 0) TOKEN_RE.lastIndex++;
   }
 
-  return [...found.entries()]
-    .map(([value, type]) => ({ value, type }))
-    .sort((a, b) => b.value.length - a.value.length);
+  return [...found.entries()].map(([value, type]) => ({ value, type })).sort((a, b) => b.value.length - a.value.length);
 }

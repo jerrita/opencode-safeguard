@@ -30,13 +30,15 @@ describe("vendored rules", () => {
 
   it("detects vendored-only provider key", () => {
     // SendGrid-style key not covered by builtins.
-    const hits = findSecretsInText('sendgrid SG.abc123XYZ456def789GHI012jkl345mno678pqr', opts);
+    const hits = findSecretsInText("sendgrid SG.abc123XYZ456def789GHI012jkl345mno678pqr", opts);
     expect(hits.length).toBeGreaterThan(0);
   });
 
   it("respects stopwords for generic assignments", () => {
     // "aaaaaaaaaa" is allowlisted (chars-only) for generic-api-key.
-    expect(findSecretsInText('secret = "aaaaaaaaaa"', opts).filter((h) => h.type === "VND_GENERIC_API_KEY")).toEqual([]);
+    expect(findSecretsInText('secret = "aaaaaaaaaa"', opts).filter((h) => h.type === "VND_GENERIC_API_KEY")).toEqual(
+      [],
+    );
   });
 
   it("does not flag documentation placeholders", () => {

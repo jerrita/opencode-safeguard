@@ -20,7 +20,15 @@ OpenCode V2 插件：在内容传给 LLM 之前做敏感信息脱敏，工具在
 
 ## 开关与配置
 
-只有一个命令项：`/safeguard`（TUI）。执行后打开配置菜单：启用/禁用、审计日志开关、检测灵敏度（strict/balanced/relaxed）。侧边栏底部常驻显示 `safeguard on/off`。
+只有一个命令项：`/safeguard`（TUI）。执行后打开配置菜单：启用/禁用、审计日志开关、检测灵敏度（strict/balanced/relaxed）。侧边栏底部常驻显示状态与当轮统计：
+
+```
+safeguard on
+3 secrets mapped (7 total)
+redacted 2 · restored 1 (tool:bash)
+```
+
+第二行是本 session 已映射条目数与进程累计条目数；第三行是当前用户轮次的触发情况（新 prompt 即重置），没有触发时显示 `clean this round`。
 
 | 方式 | 说明 |
 |---|---|
@@ -31,9 +39,9 @@ OpenCode V2 插件：在内容传给 LLM 之前做敏感信息脱敏，工具在
 
 ## 架构
 
-- `src/index.ts` 服务端插件：LLM 边界脱敏 + 本地执行还原，状态由内存对象持有，经 RPC 读写。
-- `src/rpc.ts` 共享 RPC 契约（`getState/setEnabled/setAudit/setSensitivity` + `updated` 事件），经 `./rpc` 导出。
-- `src/tui.tsx` TUI 插件（经 `./tui` 导出）：注册 `/safeguard`、配置菜单、`sidebar.footer` 状态位。经 RPC 与服务端通信，支持远端 server。
+- `src/index.ts` 服务端插件：LLM 边界脱敏 + 本地执行还原，状态由内存对象持有，经 RPC 读写；`prompt` hook 重置当轮计数，脱敏/还原累加并推送 `updated` 事件。
+- `src/rpc.ts` 共享 RPC 契约（`getState/getSession/setEnabled/setAudit/setSensitivity` + `updated` 事件），经 `./rpc` 导出。
+- `src/tui.tsx` TUI 插件（经 `./tui` 导出）：注册 `/safeguard`、配置菜单、`sidebar.footer` 状态与统计。经 RPC 与服务端通信，支持远端 server。
 
 ## 安装
 

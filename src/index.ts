@@ -5,8 +5,11 @@ import { Safeguard } from "./rpc.js";
 import { applyStored, initialState } from "./state.js";
 import { Vault } from "./vault.js";
 
+import { VENDORED_RULES } from "./vendored-rules.js";
+
 const STORAGE_KEY = "safeguard.state";
 const LEGACY_STORAGE_KEY = "safeguard.enabled";
+const RULE_COUNT = VENDORED_RULES.length + 11; // vendored + builtin patterns
 
 interface Ctx {
   location: { directory?: string; project?: { canonical?: string } };
@@ -17,7 +20,10 @@ interface Ctx {
   };
   tool: { hook(name: string, cb: (event: any) => void | Promise<void>): Promise<unknown> };
   rpc: {
-    register(def: unknown, handlers: Record<string, (input: any, context: any) => Promise<unknown>>): Promise<{
+    register(
+      def: unknown,
+      handlers: Record<string, (input: any, context: any) => Promise<unknown>>,
+    ): Promise<{
       events: { emit(name: string, data: unknown): Promise<void> };
     }>;
   };
@@ -27,7 +33,12 @@ function projectDir(ctx: Ctx): string {
   return ctx.location.project?.canonical ?? ctx.location.directory ?? process.cwd();
 }
 
-function narrowStateShape(v: unknown): { enabled?: boolean; audit?: boolean; minEntropy?: number; minTokenLength?: number } {
+function narrowStateShape(v: unknown): {
+  enabled?: boolean;
+  audit?: boolean;
+  minEntropy?: number;
+  minTokenLength?: number;
+} {
   if (typeof v !== "object" || v === null) return {};
   const o = v as Record<string, unknown>;
   const out: { enabled?: boolean; audit?: boolean; minEntropy?: number; minTokenLength?: number } = {};
@@ -74,8 +85,27 @@ export default Plugin.define({
       }
     };
 
+    let emitRound: (
+      sessionID: string,
+      redacted: number,
+      restored: number,
+      kind: string,
+    ) => Promise<void> = async () => {};
+
     const registration = await c.rpc.register(Safeguard, {
-      getState: async () => ({ ...state, literals: literals.length }),
+      getState: async () => ({ ...state, literals: literals.length, rules: RULE_COUNT }),
+      getSession: async (input) => {
+        const { sessionID } = input as { sessionID?: unknown };
+        if (typeof sessionID !== "string") throw new Error("getSession requires { sessionID: string }");
+        const r = vault.round(sessionID);
+        return {
+          entries: vault.size(sessionID),
+          totalEntries: vault.totalSize(),
+          roundRedacted: r.redacted,
+          roundRestored: r.restored,
+          roundRestoreKind: r.restoreKind,
+        };
+      },
       setEnabled: async (input) => {
         const { enabled } = narrowStateShape(input);
         if (typeof enabled !== "boolean") throw new Error("setEnabled requires { enabled: boolean }");
@@ -113,12 +143,34 @@ export default Plugin.define({
       maxStringLength: cfg.maxStringLength,
     });
 
+    emitRound = async (sessionID, redacted, restored, kind) => {
+      try {
+        await registration.events.emit("updated", {
+          enabled: state.enabled,
+          audit: state.audit,
+          sessionID,
+          entries: vault.size(sessionID),
+          totalEntries: vault.totalSize(),
+          roundRedacted: redacted,
+          roundRestored: restored,
+          roundRestoreKind: kind,
+        });
+      } catch {
+        // Best effort: a failed emit must not break the agent loop.
+      }
+    };
+
     // --- LLM boundary: redact everything bound for the model ---
     const redactHook = (label: string) => async (event: any) => {
       if (!state.enabled) return;
       try {
-        const n = redactRequestEvent(redactCtx(event.sessionID as string), event);
-        if (state.audit && n > 0) console.log(`[opencode-safeguard] ${label}: redacted ${n} secret(s) (session ${event.sessionID})`);
+        const sid = event.sessionID as string;
+        const n = redactRequestEvent(redactCtx(sid), event);
+        if (n === 0) return;
+        if (state.audit) console.log(`[opencode-safeguard] ${label}: redacted ${n} secret(s) (session ${sid})`);
+        vault.addRedacted(sid, n);
+        const r = vault.round(sid);
+        await emitRound(sid, r.redacted, r.restored, r.restoreKind);
       } catch (err) {
         // Fail open with a warning: never break the agent loop.
         console.error(`[opencode-safeguard] ${label} redaction failed:`, err);
@@ -129,12 +181,31 @@ export default Plugin.define({
     await c.session.hook("generate", redactHook("generate"));
     await c.session.hook("title", redactHook("title"));
 
+    // A user prompt starts a new round: reset the counters the sidebar shows.
+    // Content is untouched here; redaction happens at the LLM boundary.
+    await c.session.hook("prompt", async (event: any) => {
+      if (!state.enabled) return;
+      try {
+        const sid = event.sessionID as string;
+        vault.startRound(sid);
+        await emitRound(sid, 0, 0, "");
+      } catch (err) {
+        console.error("[opencode-safeguard] prompt round reset failed:", err);
+      }
+    });
+
     // --- Local boundary: restore placeholders before tool execution ---
     await c.tool.hook("execute.before", async (event: any) => {
       if (!state.enabled) return;
       try {
-        const count = restoreToolInput(vault, event.sessionID as string, event.input);
-        if (state.audit && count > 0) console.log(`[opencode-safeguard] execute.before: restored ${count} secret(s) for ${event.tool}`);
+        const sid = event.sessionID as string;
+        const count = restoreToolInput(vault, sid, event.input);
+        if (count === 0) return;
+        if (state.audit)
+          console.log(`[opencode-safeguard] execute.before: restored ${count} secret(s) for ${event.tool}`);
+        vault.addRestored(sid, count, `tool:${event.tool as string}`);
+        const r = vault.round(sid);
+        await emitRound(sid, r.redacted, r.restored, r.restoreKind);
       } catch (err) {
         console.error("[opencode-safeguard] restore failed:", err);
       }

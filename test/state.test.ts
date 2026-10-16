@@ -30,7 +30,13 @@ describe("state", () => {
 describe("rpc contract", () => {
   it("exposes the expected methods and events", () => {
     expect(Safeguard.id).toBe("safeguard");
-    expect(Object.keys(Safeguard.methods).sort()).toEqual(["getState", "setAudit", "setEnabled", "setSensitivity"]);
+    expect(Object.keys(Safeguard.methods).sort()).toEqual([
+      "getSession",
+      "getState",
+      "setAudit",
+      "setEnabled",
+      "setSensitivity",
+    ]);
     expect(Object.keys(Safeguard.events)).toEqual(["updated"]);
   });
 });
