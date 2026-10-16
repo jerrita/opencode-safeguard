@@ -1,3 +1,5 @@
+import { GLOBAL_ALLOWLISTS, VENDORED_RULES, type VendoredRule } from "./vendored-rules.js";
+
 export interface Detection {
   value: string;
   type: string;
@@ -36,6 +38,43 @@ const PATTERNS: Pattern[] = [
 ];
 
 const TOKEN_RE = /[A-Za-z0-9_\-+./=:$!#@%^&*?]{8,}/g;
+
+interface CompiledVendoredRule {
+  type: string;
+  pattern: RegExp;
+  group: 0 | 1;
+  keywords: string[];
+  stopwords: string[];
+  allow: { pattern: RegExp; target: "secret" | "match" }[];
+}
+
+function compileVendored(rules: VendoredRule[]): CompiledVendoredRule[] {
+  const out: CompiledVendoredRule[] = [];
+  for (const r of rules) {
+    try {
+      out.push({
+        type: r.type,
+        pattern: new RegExp(r.source, r.flags),
+        group: r.group,
+        keywords: r.keywords.map((k) => k.toLowerCase()),
+        stopwords: r.stopwords.map((s) => s.toLowerCase()),
+        allow: r.allow.map((a) => ({ pattern: new RegExp(a.source, a.flags), target: a.target })),
+      });
+    } catch {
+      // Invalid after conversion; vendor script already filters, this is belt-and-braces.
+    }
+  }
+  return out;
+}
+
+const VENDORED = compileVendored(VENDORED_RULES);
+const GLOBAL_ALLOW = GLOBAL_ALLOWLISTS.map((a) => {
+  try {
+    return new RegExp(a.source, a.flags);
+  } catch {
+    return null;
+  }
+}).filter((r): r is RegExp => r !== null);
 
 export function shannonEntropy(s: string): number {
   if (s.length === 0) return 0;
@@ -97,6 +136,67 @@ export function findSecretsInText(text: string, opts: ScanOptions): Detection[] 
       if (!covered && !found.has(value)) found.set(value, pattern.type);
       // Avoid infinite loop on zero-length matches.
       if (m[0].length === 0) pattern.regex.lastIndex++;
+    }
+  }
+
+  // 2b. Vendored gitleaks rules (keyword-prefiltered for hot-path speed).
+  const lower = haystack.toLowerCase();
+  for (const rule of VENDORED) {
+    if (rule.keywords.length > 0) {
+      let hit = false;
+      for (const kw of rule.keywords) {
+        if (lower.includes(kw)) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+    }
+    rule.pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    let guard = 0;
+    while ((m = rule.pattern.exec(haystack)) !== null && guard++ < 500) {
+      const raw = rule.group === 1 ? (m[1] ?? "") : m[0];
+      if (!raw || raw.length < 4) continue;
+      // Stopwords / allowlists (gitleaks FP controls).
+      const rawLower = raw.toLowerCase();
+      let skipped = false;
+      for (const sw of rule.stopwords) {
+        if (sw && rawLower.includes(sw)) {
+          skipped = true;
+          break;
+        }
+      }
+      if (!skipped) {
+        for (const a of rule.allow) {
+          const target = a.target === "match" ? m[0] : raw;
+          a.pattern.lastIndex = 0;
+          if (a.pattern.test(target)) {
+            skipped = true;
+            break;
+          }
+        }
+      }
+      if (!skipped) {
+        for (const g of GLOBAL_ALLOW) {
+          g.lastIndex = 0;
+          if (g.test(raw) || g.test(m[0])) {
+            skipped = true;
+            break;
+          }
+        }
+      }
+      if (!skipped && !found.has(raw)) {
+        let covered = false;
+        for (const existing of found.keys()) {
+          if (existing.includes(raw)) {
+            covered = true;
+            break;
+          }
+        }
+        if (!covered) found.set(raw, rule.type);
+      }
+      if (m[0].length === 0) rule.pattern.lastIndex++;
     }
   }
 

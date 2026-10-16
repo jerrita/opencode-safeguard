@@ -12,8 +12,11 @@ OpenCode V2 插件：在内容传给 LLM 之前做敏感信息脱敏，工具在
 ## 检测范围
 
 1. `.env` 精确值（默认 `.env,.env.local,.env.production`）
-2. 高可信 pattern：AWS、GitHub、Stripe、OpenAI、Anthropic、Slack、JWT、PEM 私钥、Bearer、连接串、`password|secret|token|api_key` 赋值形
-3. 高熵兜底：长度≥20 + Shannon 熵≥4.5 + 多字符集（可调）
+2. 内置高可信 pattern：AWS、GitHub、Stripe、OpenAI、Anthropic、Slack、JWT、PEM 私钥、Bearer、连接串、`password|secret|token|api_key` 赋值形
+3. Vendored 规则：构建时从 `gitleaks v8.30.1` 默认配置（MIT）转换的 221 条 provider 规则，随包发布、运行时零依赖零网络；gitleaks 的 allowlist/stopwords/keywords 一并转换，用于误杀控制与热路径预过滤
+4. 高熵兜底：长度≥20 + Shannon 熵≥4.5 + 多字符集（可调）
+
+更新 vendored 规则：`npm run vendor-rules [-- --ref vX.Y.Z]`（需网络，生成 `src/vendored-rules.ts` 后提交）。
 
 ## 开关（三种方式）
 
