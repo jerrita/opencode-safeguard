@@ -18,15 +18,22 @@ OpenCode V2 插件：在内容传给 LLM 之前做敏感信息脱敏，工具在
 
 更新 vendored 规则：`npm run vendor-rules [-- --ref vX.Y.Z]`（需网络，生成 `src/vendored-rules.ts` 后提交）。
 
-## 开关（三种方式）
+## 开关与配置
+
+只有一个命令项：`/safeguard`（TUI）。执行后打开配置菜单：启用/禁用、审计日志开关、检测灵敏度（strict/balanced/relaxed）。侧边栏底部常驻显示 `safeguard on/off`。
 
 | 方式 | 说明 |
 |---|---|
-| 配置 | `plugins: [{ package: "opencode-safeguard", options: { enabled: false } }]` |
-| 环境变量 | `OPENCODE_SAFEGUARD_ENABLED=0` 关闭，`=1` 开启；启动时优先级最高 |
-| 命令 | `/safeguard-on`、`/safeguard-off`、`/safeguard-status`（运行时切换，持久化到 storage） |
+| `/safeguard` | TUI 配置菜单（推荐） |
+| 环境变量 | `OPENCODE_SAFEGUARD_ENABLED=0` 关闭，`=1` 开启；作为启动默认值，可被菜单覆盖 |
 
-运行时优先级：storage（命令切换结果）> 环境变量 > 配置 > 默认开启。
+运行时优先级：配置菜单（持久化到 storage）> 环境变量 > 插件 `options.enabled` > 默认开启。无 TUI 环境（headless）下用环境变量开关。
+
+## 架构
+
+- `src/index.ts` 服务端插件：LLM 边界脱敏 + 本地执行还原，状态由内存对象持有，经 RPC 读写。
+- `src/rpc.ts` 共享 RPC 契约（`getState/setEnabled/setAudit/setSensitivity` + `updated` 事件），经 `./rpc` 导出。
+- `src/tui.tsx` TUI 插件（经 `./tui` 导出）：注册 `/safeguard`、配置菜单、`sidebar.footer` 状态位。经 RPC 与服务端通信，支持远端 server。
 
 ## 安装
 

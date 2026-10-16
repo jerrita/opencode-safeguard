@@ -1,9 +1,12 @@
 import { Plugin } from "@opencode/plugin";
 import { loadEnvValues, resolveConfig, type SafeguardOptions } from "./config.js";
 import { redactRequestEvent, restoreToolInput } from "./redact.js";
+import { Safeguard } from "./rpc.js";
+import { applyStored, initialState } from "./state.js";
 import { Vault } from "./vault.js";
 
-const STORAGE_KEY = "safeguard.enabled";
+const STORAGE_KEY = "safeguard.state";
+const LEGACY_STORAGE_KEY = "safeguard.enabled";
 
 interface Ctx {
   location: { directory?: string; project?: { canonical?: string } };
@@ -11,26 +14,28 @@ interface Ctx {
   storage: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> };
   session: {
     hook(name: string, cb: (event: any) => void | Promise<void>): Promise<unknown>;
-    synthetic?(input: { sessionID: string; text: string }): Promise<unknown>;
   };
   tool: { hook(name: string, cb: (event: any) => void | Promise<void>): Promise<unknown> };
-  command: { transform(cb: (editor: { add(def: unknown): void }) => void): Promise<unknown> };
+  rpc: {
+    register(def: unknown, handlers: Record<string, (input: any, context: any) => Promise<unknown>>): Promise<{
+      events: { emit(name: string, data: unknown): Promise<void> };
+    }>;
+  };
 }
 
 function projectDir(ctx: Ctx): string {
   return ctx.location.project?.canonical ?? ctx.location.directory ?? process.cwd();
 }
 
-async function announce(ctx: Ctx, sessionID: string, text: string): Promise<void> {
-  try {
-    if (typeof ctx.session.synthetic === "function") {
-      await ctx.session.synthetic({ sessionID, text });
-      return;
-    }
-  } catch {
-    // Fall through to console.
-  }
-  console.log(`[opencode-safeguard] ${text}`);
+function narrowStateShape(v: unknown): { enabled?: boolean; audit?: boolean; minEntropy?: number; minTokenLength?: number } {
+  if (typeof v !== "object" || v === null) return {};
+  const o = v as Record<string, unknown>;
+  const out: { enabled?: boolean; audit?: boolean; minEntropy?: number; minTokenLength?: number } = {};
+  if (typeof o.enabled === "boolean") out.enabled = o.enabled;
+  if (typeof o.audit === "boolean") out.audit = o.audit;
+  if (typeof o.minEntropy === "number") out.minEntropy = o.minEntropy;
+  if (typeof o.minTokenLength === "number") out.minTokenLength = o.minTokenLength;
+  return out;
 }
 
 export default Plugin.define({
@@ -44,63 +49,68 @@ export default Plugin.define({
       if (!literals.includes(v)) literals.push(v);
     }
 
-    // Toggle state: storage override > startup config (which already folds env var).
-    const state = { enabled: cfg.enabled };
+    // Live state: startup config (folds env var) < persisted storage < RPC mutations.
+    const state = initialState(cfg);
     try {
       const stored = await c.storage.get(STORAGE_KEY);
-      if (typeof stored === "boolean") state.enabled = stored;
+      if (stored !== undefined) {
+        applyStored(state, stored);
+      } else {
+        // Migrate the pre-RPC boolean toggle.
+        const legacy = await c.storage.get(LEGACY_STORAGE_KEY);
+        if (typeof legacy === "boolean") {
+          state.enabled = legacy;
+          await c.storage.set(STORAGE_KEY, { ...state });
+        }
+      }
     } catch {
-      // Storage unavailable; keep startup value.
+      // Storage unavailable; keep startup values.
     }
-    const setEnabled = async (enabled: boolean): Promise<void> => {
-      state.enabled = enabled;
+    const persist = async (): Promise<void> => {
       try {
-        await c.storage.set(STORAGE_KEY, enabled);
+        await c.storage.set(STORAGE_KEY, { ...state });
       } catch {
         // Best effort persistence.
       }
     };
+
+    const registration = await c.rpc.register(Safeguard, {
+      getState: async () => ({ ...state, literals: literals.length }),
+      setEnabled: async (input) => {
+        const { enabled } = narrowStateShape(input);
+        if (typeof enabled !== "boolean") throw new Error("setEnabled requires { enabled: boolean }");
+        state.enabled = enabled;
+        await persist();
+        await registration.events.emit("updated", { enabled: state.enabled, audit: state.audit });
+        return { enabled: state.enabled };
+      },
+      setAudit: async (input) => {
+        const { audit } = narrowStateShape(input);
+        if (typeof audit !== "boolean") throw new Error("setAudit requires { audit: boolean }");
+        state.audit = audit;
+        await persist();
+        await registration.events.emit("updated", { enabled: state.enabled, audit: state.audit });
+        return { audit: state.audit };
+      },
+      setSensitivity: async (input) => {
+        const { minEntropy, minTokenLength } = narrowStateShape(input);
+        if (typeof minEntropy !== "number" || typeof minTokenLength !== "number") {
+          throw new Error("setSensitivity requires { minEntropy: number, minTokenLength: number }");
+        }
+        state.minEntropy = minEntropy;
+        state.minTokenLength = minTokenLength;
+        await persist();
+        return { minEntropy: state.minEntropy, minTokenLength: state.minTokenLength };
+      },
+    });
+
     const redactCtx = (sessionID: string) => ({
       vault,
       sessionID,
       literalValues: literals,
-      minEntropy: cfg.minEntropy,
-      minTokenLength: cfg.minTokenLength,
+      minEntropy: state.minEntropy,
+      minTokenLength: state.minTokenLength,
       maxStringLength: cfg.maxStringLength,
-    });
-
-    // --- Convenient on/off commands ---
-    await c.command.transform((editor) => {
-      const ed = editor as unknown as {
-        add(def: { name: string; description?: string; execute: (input: { sessionID: string }) => Promise<void> }): void;
-      };
-      ed.add({
-        name: "safeguard-on",
-        description: "Enable opencode-safeguard secret redaction",
-        execute: async (input) => {
-          await setEnabled(true);
-          await announce(c, input.sessionID, "Safeguard enabled: secrets will be redacted before reaching the LLM.");
-        },
-      });
-      ed.add({
-        name: "safeguard-off",
-        description: "Disable opencode-safeguard secret redaction",
-        execute: async (input) => {
-          await setEnabled(false);
-          await announce(c, input.sessionID, "Safeguard disabled: content will be sent to the LLM unredacted.");
-        },
-      });
-      ed.add({
-        name: "safeguard-status",
-        description: "Show opencode-safeguard status",
-        execute: async (input) => {
-          await announce(
-            c,
-            input.sessionID,
-            `Safeguard ${state.enabled ? "enabled" : "disabled"} (${vault.size(input.sessionID)} secrets mapped in this session, ${literals.length} literal values loaded).`,
-          );
-        },
-      });
     });
 
     // --- LLM boundary: redact everything bound for the model ---
@@ -108,7 +118,7 @@ export default Plugin.define({
       if (!state.enabled) return;
       try {
         const n = redactRequestEvent(redactCtx(event.sessionID as string), event);
-        if (cfg.audit && n > 0) console.log(`[opencode-safeguard] ${label}: redacted ${n} secret(s) (session ${event.sessionID})`);
+        if (state.audit && n > 0) console.log(`[opencode-safeguard] ${label}: redacted ${n} secret(s) (session ${event.sessionID})`);
       } catch (err) {
         // Fail open with a warning: never break the agent loop.
         console.error(`[opencode-safeguard] ${label} redaction failed:`, err);
@@ -124,7 +134,7 @@ export default Plugin.define({
       if (!state.enabled) return;
       try {
         const count = restoreToolInput(vault, event.sessionID as string, event.input);
-        if (cfg.audit && count > 0) console.log(`[opencode-safeguard] execute.before: restored ${count} secret(s) for ${event.tool}`);
+        if (state.audit && count > 0) console.log(`[opencode-safeguard] execute.before: restored ${count} secret(s) for ${event.tool}`);
       } catch (err) {
         console.error("[opencode-safeguard] restore failed:", err);
       }
@@ -134,13 +144,13 @@ export default Plugin.define({
     // output keeps real values locally; the next context hook redacts them
     // again before they reach the model. Here we only audit.
     await c.tool.hook("execute.after", async (event: any) => {
-      if (!state.enabled || !cfg.audit) return;
+      if (!state.enabled || !state.audit) return;
       if (event.status !== "completed") return;
     });
 
     console.log(
       `[opencode-safeguard] loaded (${state.enabled ? "enabled" : "disabled"}, ${literals.length} literals). ` +
-        `Toggle: /safeguard-on, /safeguard-off, /safeguard-status or OPENCODE_SAFEGUARD_ENABLED=0/1.`,
+        `Configure: /safeguard (TUI) or OPENCODE_SAFEGUARD_ENABLED=0/1.`,
     );
   },
 });
