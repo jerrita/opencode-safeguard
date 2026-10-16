@@ -28,7 +28,7 @@ safeguard on
 redacted 2 · restored 1 (tool:bash)
 ```
 
-第二行是本 session 已映射条目数与进程累计条目数；第三行是当前用户轮次的触发情况（新 prompt 即重置），没有触发时显示 `clean`。
+第二行是本 session 已映射条目数与所在 location 插件实例的累计条目数；第三行是当前用户轮次的触发情况（新 prompt 即重置），没有触发时显示 `clean`。侧边栏和配置菜单均访问当前 session 所在 location。
 
 | 方式 | 说明 |
 |---|---|

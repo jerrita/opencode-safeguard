@@ -1,5 +1,6 @@
 import { Plugin, usePlugin } from "@opencode/plugin/tui";
-import { createEffect, createSignal, Show } from "solid-js";
+import type { LocationRef } from "@opencode/client";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { Safeguard } from "./rpc.js";
 import { presetOf, SENSITIVITY_PRESETS, type SensitivityName } from "./state.js";
 
@@ -64,31 +65,32 @@ export default Plugin.define({
   id: "opencode-safeguard-tui",
   async setup(context) {
     const rpc = context.client.rpc(Safeguard);
-    const [enabled, setEnabled] = createSignal<boolean | undefined>(undefined);
     const [tick, setTick] = createSignal(0);
 
-    const refreshState = async (): Promise<Snapshot | undefined> => {
-      try {
-        const s = narrowSnapshot(await rpc.getState({}));
-        setEnabled(s.enabled);
-        return s;
-      } catch {
-        setEnabled(undefined);
-        return undefined;
-      }
+    const currentLocation = (): LocationRef => {
+      const route = context.ui.router.current();
+      return (
+        (route.type === "session" ? context.data.session.get(route.sessionID)?.location : undefined) ??
+        context.location ??
+        context.data.location.default()
+      );
     };
-    const fetchSession = async (sessionID: string): Promise<SessionStats | undefined> => {
+    const refreshState = async (location: LocationRef): Promise<Snapshot | undefined> => {
       try {
-        return narrowSession(await rpc.getSession({ sessionID }));
+        return narrowSnapshot(await rpc.getState({}, { location }));
       } catch {
         return undefined;
       }
     };
-    await refreshState();
+    const fetchSession = async (sessionID: string, location: LocationRef): Promise<SessionStats | undefined> => {
+      try {
+        return narrowSession(await rpc.getSession({ sessionID }, { location }));
+      } catch {
+        return undefined;
+      }
+    };
 
-    const offUpdated = rpc.events.on("updated", (event) => {
-      const data = (event.data ?? {}) as Record<string, unknown>;
-      if (typeof data.enabled === "boolean") setEnabled(data.enabled);
+    const offUpdated = rpc.events.on("updated", () => {
       // Any update may change the stats of the session shown in the sidebar.
       setTick((n) => n + 1);
     });
@@ -98,7 +100,7 @@ export default Plugin.define({
     };
     const unavailable = (): void => toast("Server plugin unavailable", "error");
 
-    const pickSensitivity = async (s: Snapshot): Promise<void> => {
+    const pickSensitivity = async (s: Snapshot, location: LocationRef): Promise<void> => {
       const current = presetOf(s.minEntropy, s.minTokenLength);
       const choice = await context.ui.dialog.select<SensitivityName | "back">({
         title: "Sensitivity",
@@ -114,7 +116,7 @@ export default Plugin.define({
       });
       if (choice === undefined || choice === "back") return;
       try {
-        await rpc.setSensitivity({ ...SENSITIVITY_PRESETS[choice] });
+        await rpc.setSensitivity({ ...SENSITIVITY_PRESETS[choice] }, { location });
         toast(`Sensitivity: ${choice}`);
       } catch {
         unavailable();
@@ -122,8 +124,9 @@ export default Plugin.define({
     };
 
     const openMenu = async (): Promise<void> => {
+      const location = currentLocation();
       for (;;) {
-        const s = await refreshState();
+        const s = await refreshState(location);
         if (!s) {
           unavailable();
           return;
@@ -153,14 +156,13 @@ export default Plugin.define({
         if (choice === undefined) return;
         try {
           if (choice === "toggle") {
-            const r = (await rpc.setEnabled({ enabled: !s.enabled })) as { enabled: boolean };
-            setEnabled(r.enabled);
+            const r = (await rpc.setEnabled({ enabled: !s.enabled }, { location })) as { enabled: boolean };
             toast(r.enabled ? "Enabled" : "Disabled");
           } else if (choice === "audit") {
-            await rpc.setAudit({ audit: !s.audit });
+            await rpc.setAudit({ audit: !s.audit }, { location });
             toast(`Audit logging ${!s.audit ? "on" : "off"}`);
           } else {
-            await pickSensitivity(s);
+            await pickSensitivity(s, location);
           }
         } catch {
           unavailable();
@@ -188,23 +190,34 @@ export default Plugin.define({
       render: (input) => {
         const ctx = usePlugin();
         const [loaded, setLoaded] = createSignal(false);
+        const [enabled, setEnabled] = createSignal<boolean | undefined>(undefined);
         const [stats, setStats] = createSignal<SessionStats | undefined>(undefined);
         // Refetch on mount and after every server update (new round, redaction, restore).
         createEffect(() => {
           tick();
           const sessionID = input.sessionID;
+          const location =
+            context.data.session.get(sessionID)?.location ?? context.location ?? context.data.location.default();
+          let active = true;
+          onCleanup(() => {
+            active = false;
+          });
+          setLoaded(false);
+          setEnabled(undefined);
+          setStats(undefined);
           void (async () => {
-            const s = await fetchSession(sessionID);
-            if (s) setStats(s);
+            const [state, s] = await Promise.all([refreshState(location), fetchSession(sessionID, location)]);
+            if (!active) return;
+            setEnabled(state?.enabled);
+            setStats(s);
             setLoaded(true);
           })();
         });
-        const on = enabled();
         const dim = ctx.theme.text.muted;
         return (
           <box flexDirection="column">
             <text fg={ctx.theme.text.base}>
-              {on === undefined ? "safeguard ?" : on ? "safeguard on" : "safeguard off"}
+              {enabled() === undefined ? "safeguard ?" : enabled() ? "safeguard on" : "safeguard off"}
             </text>
             <Show when={loaded()}>
               <Show when={stats()} fallback={<text fg={dim}>server unreachable</text>}>
