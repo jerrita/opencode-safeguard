@@ -45,18 +45,19 @@ function narrowSession(v: unknown): SessionStats {
 }
 
 function roundLabel(s: SessionStats): string {
-  if (s.roundRedacted === 0 && s.roundRestored === 0) return "clean this round";
+  if (s.roundRedacted === 0 && s.roundRestored === 0) return "clean";
   const parts: string[] = [];
   if (s.roundRedacted > 0) parts.push(`redacted ${s.roundRedacted}`);
-  if (s.roundRestored > 0) parts.push(`restored ${s.roundRestored}${s.roundRestoreKind ? ` (${s.roundRestoreKind})` : ""}`);
+  if (s.roundRestored > 0)
+    parts.push(`restored ${s.roundRestored}${s.roundRestoreKind ? ` (${s.roundRestoreKind})` : ""}`);
   return parts.join(" · ");
 }
 
 const SENSITIVITY_ORDER: SensitivityName[] = ["strict", "balanced", "relaxed"];
 const SENSITIVITY_HINT: Record<SensitivityName, string> = {
-  strict: "Catches more (entropy 4.0, tokens from 16 chars)",
-  balanced: "Default (entropy 4.5, tokens from 20 chars)",
-  relaxed: "Fewer false positives (entropy 5.0, tokens from 28 chars)",
+  strict: "Catches more (entropy ≥4.0, tokens ≥16 chars)",
+  balanced: "Default (entropy ≥4.5, tokens ≥20 chars)",
+  relaxed: "Fewer false positives (entropy ≥5.0, tokens ≥28 chars)",
 };
 
 export default Plugin.define({
@@ -95,12 +96,12 @@ export default Plugin.define({
     const toast = (message: string, variant: "success" | "error" | "info" = "success"): void => {
       context.ui.toast.show({ title: "Safeguard", message, variant });
     };
-    const unavailable = (): void => toast("Server plugin unavailable (is opencode-safeguard loaded?)", "error");
+    const unavailable = (): void => toast("Server plugin unavailable", "error");
 
     const pickSensitivity = async (s: Snapshot): Promise<void> => {
       const current = presetOf(s.minEntropy, s.minTokenLength);
       const choice = await context.ui.dialog.select<SensitivityName | "back">({
-        title: "Detection sensitivity",
+        title: "Sensitivity",
         current,
         options: [
           ...SENSITIVITY_ORDER.map((name) => ({
@@ -108,7 +109,7 @@ export default Plugin.define({
             value: name as SensitivityName | "back",
             description: SENSITIVITY_HINT[name],
           })),
-          { title: "Back", value: "back" as const, description: "Return without changing" },
+          { title: "Back", value: "back" as const },
         ],
       });
       if (choice === undefined || choice === "back") return;
@@ -129,18 +130,18 @@ export default Plugin.define({
         }
         const preset = presetOf(s.minEntropy, s.minTokenLength);
         const choice = await context.ui.dialog.select<"toggle" | "audit" | "sensitivity">({
-          title: `Safeguard ${s.enabled ? "on" : "off"} — ${s.rules} detection rules, ${s.literals} known secrets`,
+          title: `Safeguard: ${s.enabled ? "on" : "off"} · ${s.rules} rules · ${s.literals} known secrets`,
           current: "toggle",
           options: [
             {
               title: s.enabled ? "Disable" : "Enable",
               value: "toggle",
-              description: s.enabled ? "Send content to the LLM unredacted" : "Redact secrets before they reach the LLM",
+              description: s.enabled ? "Send LLM requests unredacted" : "Redact secrets in LLM requests",
             },
             {
               title: `Audit logging ${s.audit ? "on" : "off"}`,
               value: "audit",
-              description: "Log redaction counts, never values",
+              description: "Counts only, no values",
             },
             {
               title: `Sensitivity: ${preset}`,
@@ -154,10 +155,10 @@ export default Plugin.define({
           if (choice === "toggle") {
             const r = (await rpc.setEnabled({ enabled: !s.enabled })) as { enabled: boolean };
             setEnabled(r.enabled);
-            toast(`Safeguard ${r.enabled ? "enabled" : "disabled"}`);
+            toast(r.enabled ? "Enabled" : "Disabled");
           } else if (choice === "audit") {
             await rpc.setAudit({ audit: !s.audit });
-            toast(`Audit logging ${!s.audit ? "enabled" : "disabled"}`);
+            toast(`Audit logging ${!s.audit ? "on" : "off"}`);
           } else {
             await pickSensitivity(s);
           }
@@ -202,9 +203,11 @@ export default Plugin.define({
         const dim = ctx.theme.text.muted;
         return (
           <box flexDirection="column">
-            <text fg={ctx.theme.text.base}>{on === undefined ? "safeguard ?" : on ? "safeguard on" : "safeguard off"}</text>
+            <text fg={ctx.theme.text.base}>
+              {on === undefined ? "safeguard ?" : on ? "safeguard on" : "safeguard off"}
+            </text>
             <Show when={loaded()}>
-              <Show when={stats()} fallback={<text fg={dim}>safeguard: server unreachable</text>}>
+              <Show when={stats()} fallback={<text fg={dim}>server unreachable</text>}>
                 {(st) => (
                   <box flexDirection="column">
                     <text fg={dim}>{`${st().entries} secrets mapped (${st().totalEntries} total)`}</text>
