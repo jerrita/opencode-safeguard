@@ -1,0 +1,53 @@
+# opencode-safeguard
+
+OpenCode V2 插件：在内容传给 LLM 之前做敏感信息脱敏，工具在本地执行前还原真值，操作不受影响。
+
+## 原理
+
+- **LLM 边界脱敏**：`session.hook("context" / "compaction" / "generate" / "title")` 改写发往模型的 `system` + `messages`（含用户 prompt、tool 输出回放、tool call 参数），只影响本次请求，不改持久化历史。
+- **本地执行还原**：`tool.hook("execute.before")` 把占位符换回真值后再执行，bash/write/edit 拿到真实 secret。
+- **Vault 映射**：内存 `Map<真值, __SG_<TYPE>_<N>__>`，按 session 隔离、同值同占位符、进程生命周期持有、不落盘。
+- `prompt` hook 不做脱敏（它会改持久化输入，真值丢失后无法还原）；`tool.execute.after` 不改输出（下次 context hook 会再次脱敏）。
+
+## 检测范围
+
+1. `.env` 精确值（默认 `.env,.env.local,.env.production`）
+2. 高可信 pattern：AWS、GitHub、Stripe、OpenAI、Anthropic、Slack、JWT、PEM 私钥、Bearer、连接串、`password|secret|token|api_key` 赋值形
+3. 高熵兜底：长度≥20 + Shannon 熵≥4.5 + 多字符集（可调）
+
+## 开关（三种方式）
+
+| 方式 | 说明 |
+|---|---|
+| 配置 | `plugins: [{ package: "opencode-safeguard", options: { enabled: false } }]` |
+| 环境变量 | `OPENCODE_SAFEGUARD_ENABLED=0` 关闭，`=1` 开启；启动时优先级最高 |
+| 命令 | `/safeguard-on`、`/safeguard-off`、`/safeguard-status`（运行时切换，持久化到 storage） |
+
+运行时优先级：storage（命令切换结果）> 环境变量 > 配置 > 默认开启。
+
+## 安装
+
+```jsonc
+// opencode.jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    [{ "package": "opencode-safeguard", "options": {
+      "enabled": true,
+      "envFiles": [".env", ".env.local"],
+      "extraValues": [],
+      "minValueLength": 6,
+      "minEntropy": 4.5,
+      "minTokenLength": 20
+    } }]
+  ]
+}
+```
+
+## 开发
+
+```sh
+npm install
+npm test
+npm run build
+```

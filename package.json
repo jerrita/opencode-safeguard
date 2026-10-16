@@ -1,0 +1,27 @@
+{
+  "name": "opencode-safeguard",
+  "version": "0.1.0",
+  "description": "Sensitive-data safeguard for OpenCode: redacts secrets before they reach the LLM, restores them before local tool execution.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "fmt": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\""
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.0"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.31",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "license": "MIT"
+}
